@@ -1,0 +1,30 @@
+[project]
+name = "blitz-sdk"
+version = "0.1.0"
+description = "Drop-in OpenTelemetry tracing for OpenAI, Anthropic, and Gemini LLM calls. Ships full I/O, token usage, model, latency, and cost to your blitz backend."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "opentelemetry-api>=1.27.0",
+  "opentelemetry-sdk>=1.27.0",
+]
+
+# Provider instrumentors are optional extras — install only the ones you use.
+# We wrap the maintained openllmetry (Traceloop) instrumentors rather than
+# hand-rolling per-provider patching.
+[project.optional-dependencies]
+openai = ["opentelemetry-instrumentation-openai>=0.33.0"]
+anthropic = ["opentelemetry-instrumentation-anthropic>=0.33.0"]
+gemini = ["opentelemetry-instrumentation-google-generativeai>=0.33.0"]
+all = [
+  "opentelemetry-instrumentation-openai>=0.33.0",
+  "opentelemetry-instrumentation-anthropic>=0.33.0",
+  "opentelemetry-instrumentation-google-generativeai>=0.33.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["blitz"]
