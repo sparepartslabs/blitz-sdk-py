@@ -87,6 +87,7 @@ class BlitzSpanExporter(SpanExporter):
             if span.status is not None and span.status.status_code == StatusCode.ERROR
             else "ok"
         )
+        resource_attrs = dict(span.resource.attributes or {})
 
         return {
             "trace_id": format(ctx.trace_id, "032x"),
@@ -95,6 +96,7 @@ class BlitzSpanExporter(SpanExporter):
                 format(span.parent.span_id, "016x") if span.parent else None
             ),
             "name": span.name,
+            "service_name": resource_attrs.get("service.name"),
             "provider": attrs.get("gen_ai.system"),
             "model": attrs.get("gen_ai.response.model")
             or attrs.get("gen_ai.request.model"),

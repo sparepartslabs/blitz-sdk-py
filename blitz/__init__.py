@@ -18,11 +18,13 @@ and shipped to the blitz backend. Nothing else in your code changes.
 from __future__ import annotations
 
 import atexit
+import contextlib
 import logging
 import os
-from typing import Callable, Optional
+from typing import Callable, Generator, Optional
 
 from opentelemetry import trace
+from opentelemetry import trace as _otel_trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -31,7 +33,7 @@ from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 from ._exporter import BlitzSpanExporter
 from ._instrument import instrument_providers
 
-__all__ = ["init"]
+__all__ = ["init", "workflow"]
 
 logger = logging.getLogger("blitz")
 
@@ -119,3 +121,18 @@ def init(
         sample_rate,
     )
     return instrumented
+
+
+@contextlib.contextmanager
+def workflow(name: str) -> Generator[None, None, None]:
+    """Wrap LLM calls in a named parent span.
+
+    The span name becomes the ``root_name`` on the blitz trace, enabling
+    per-feature cost grouping in the dashboard::
+
+        with blitz.workflow("mechanic-assistant"):
+            response = client.messages.create(...)
+    """
+    tracer = _otel_trace.get_tracer("blitz")
+    with tracer.start_as_current_span(name):
+        yield
