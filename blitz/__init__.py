@@ -17,11 +17,12 @@ and shipped to the blitz backend. Nothing else in your code changes.
 
 from __future__ import annotations
 
+import asyncio
 import atexit
-import contextlib
+import functools
 import logging
 import os
-from typing import Callable, Generator, Optional
+from typing import Any, Callable, Optional
 
 from opentelemetry import trace
 from opentelemetry import trace as _otel_trace
@@ -123,16 +124,54 @@ def init(
     return instrumented
 
 
-@contextlib.contextmanager
-def workflow(name: str) -> Generator[None, None, None]:
+class _Workflow:
+    """Returned by :func:`workflow` — usable as a context manager or decorator."""
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+        self._ctx: Any = None
+
+    # -- context manager -------------------------------------------------------
+
+    def __enter__(self) -> None:
+        self._ctx = _otel_trace.get_tracer("blitz").start_as_current_span(self._name)
+        self._ctx.__enter__()
+
+    def __exit__(self, *args: Any) -> Optional[bool]:
+        return self._ctx.__exit__(*args)
+
+    # -- decorator -------------------------------------------------------------
+
+    def __call__(self, fn: Callable) -> Callable:
+        if asyncio.iscoroutinefunction(fn):
+            @functools.wraps(fn)
+            async def async_wrap(*args: Any, **kwargs: Any) -> Any:
+                with _Workflow(self._name):
+                    return await fn(*args, **kwargs)
+            return async_wrap
+
+        @functools.wraps(fn)
+        def sync_wrap(*args: Any, **kwargs: Any) -> Any:
+            with _Workflow(self._name):
+                return fn(*args, **kwargs)
+        return sync_wrap
+
+
+def workflow(name: str) -> _Workflow:
     """Wrap LLM calls in a named parent span.
 
-    The span name becomes the ``root_name`` on the blitz trace, enabling
-    per-feature cost grouping in the dashboard::
+    Works as a context manager or a decorator (sync and async)::
 
+        # context manager
         with blitz.workflow("mechanic-assistant"):
             response = client.messages.create(...)
+
+        # decorator
+        @blitz.workflow("mechanic-assistant")
+        async def _ai_reply(...):
+            response = client.messages.create(...)
+
+    The span name becomes ``root_name`` on the blitz trace, enabling
+    per-feature cost grouping in the dashboard.
     """
-    tracer = _otel_trace.get_tracer("blitz")
-    with tracer.start_as_current_span(name):
-        yield
+    return _Workflow(name)
