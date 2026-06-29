@@ -24,6 +24,12 @@ logger = logging.getLogger("blitz")
 _PROMPT_PREFIX = "gen_ai.prompt."
 _COMPLETION_PREFIX = "gen_ai.completion."
 
+# Newer OTel GenAI semantic convention: instrumentors emit a single JSON-encoded
+# attribute per role group rather than indexed gen_ai.prompt.N.* keys.
+_SYSTEM_KEY = "gen_ai.system_instructions"
+_INPUT_KEY = "gen_ai.input.messages"
+_OUTPUT_KEY = "gen_ai.output.messages"
+
 
 class BlitzSpanExporter(SpanExporter):
     def __init__(
@@ -97,7 +103,8 @@ class BlitzSpanExporter(SpanExporter):
             ),
             "name": span.name,
             "service_name": resource_attrs.get("service.name"),
-            "provider": attrs.get("gen_ai.system"),
+            "provider": attrs.get("gen_ai.system")
+            or attrs.get("gen_ai.provider.name"),
             "model": attrs.get("gen_ai.response.model")
             or attrs.get("gen_ai.request.model"),
             "input_tokens": _first_int(
@@ -120,11 +127,20 @@ class BlitzSpanExporter(SpanExporter):
         }
 
     def _split_content(self, attrs: dict):
-        """Pull the indexed prompt/completion attributes
-        (gen_ai.prompt.0.role, gen_ai.prompt.0.content, ...) into ordered lists,
-        leaving everything else in `other`."""
+        """Pull prompt/completion messages out of the GenAI attributes into
+        ordered ``{role, content}`` lists, leaving everything else in ``other``.
+
+        Handles both conventions:
+        - legacy indexed keys (``gen_ai.prompt.0.role``, ``gen_ai.prompt.0.content``)
+        - newer single JSON attributes (``gen_ai.system_instructions``,
+          ``gen_ai.input.messages``, ``gen_ai.output.messages``)
+        Consumed keys are dropped from ``other`` so message text isn't duplicated.
+        """
         prompts: dict[str, dict] = {}
         completions: dict[str, dict] = {}
+        system_msgs: list[dict] = []
+        input_msgs: list[dict] = []
+        output_msgs: list[dict] = []
         other: dict = {}
 
         for key, value in attrs.items():
@@ -134,10 +150,22 @@ class BlitzSpanExporter(SpanExporter):
             elif key.startswith(_COMPLETION_PREFIX):
                 idx, _, field = key[len(_COMPLETION_PREFIX) :].partition(".")
                 completions.setdefault(idx, {})[field or "value"] = value
+            elif key == _SYSTEM_KEY:
+                msg = _system_message(value)
+                if msg:
+                    system_msgs.append(msg)
+            elif key == _INPUT_KEY:
+                input_msgs.extend(_messages(value))
+            elif key == _OUTPUT_KEY:
+                output_msgs.extend(_messages(value))
             else:
                 other[key] = value
 
-        return _ordered(prompts), _ordered(completions), other
+        # system first, then the conversation; legacy indexed keys take precedence
+        # if both happen to be present.
+        prompt = _ordered(prompts) or (system_msgs + input_msgs)
+        completion = _ordered(completions) or output_msgs
+        return prompt, completion, other
 
     def _redact_content(self, content: dict) -> dict:
         for bucket in ("prompt", "completion"):
@@ -162,6 +190,61 @@ def _ordered(indexed: dict[str, dict]) -> list[dict]:
         indexed[i]
         for i in sorted(indexed, key=lambda x: int(x) if x.isdigit() else 0)
     ]
+
+
+def _loads(value):
+    """New-convention message attributes arrive as JSON strings; parse leniently."""
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (ValueError, TypeError):
+            return value
+    return value
+
+
+def _text_from_parts(parts) -> str:
+    """Join the text of a message's ``parts`` ([{type:"text", content}, ...]);
+    non-text parts (images, tool calls) become a ``[type]`` placeholder."""
+    out: list[str] = []
+    if isinstance(parts, list):
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "text" and part.get("content") is not None:
+                out.append(str(part["content"]))
+            elif part.get("type"):
+                out.append(f"[{part['type']}]")
+    return "\n".join(out)
+
+
+def _messages(value) -> list[dict]:
+    """Normalize gen_ai.input/output.messages ([{role, parts:[...]}]) into
+    ``{role, content}`` messages."""
+    data = _loads(value)
+    if not isinstance(data, list):
+        return []
+    msgs: list[dict] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        text = _text_from_parts(item.get("parts"))
+        if not text and isinstance(item.get("content"), str):
+            text = item["content"]
+        msgs.append({"role": item.get("role", ""), "content": text})
+    return msgs
+
+
+def _system_message(value) -> Optional[dict]:
+    """Normalize gen_ai.system_instructions ([{type:"text", content}] or a plain
+    string) into a single ``{role:"system", content}`` message."""
+    data = _loads(value)
+    if isinstance(data, list):
+        text = _text_from_parts(data)
+    elif isinstance(data, str):
+        text = data
+    else:
+        text = ""
+    return {"role": "system", "content": text} if text else None
 
 
 def _first_int(attrs: dict, *keys: str):
