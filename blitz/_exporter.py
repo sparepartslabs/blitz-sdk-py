@@ -103,6 +103,7 @@ class BlitzSpanExporter(SpanExporter):
             ),
             "name": span.name,
             "service_name": resource_attrs.get("service.name"),
+            "environment": resource_attrs.get("deployment.environment"),
             "provider": attrs.get("gen_ai.system")
             or attrs.get("gen_ai.provider.name"),
             "model": attrs.get("gen_ai.response.model")

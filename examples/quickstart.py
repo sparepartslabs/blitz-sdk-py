@@ -19,6 +19,7 @@ blitz.init(
     api_key=os.environ["BLITZ_API_KEY"],
     endpoint=os.environ.get("BLITZ_ENDPOINT", "http://localhost:8000"),
     sample_rate=1.0,  # trace everything in the demo
+    environment=os.environ.get("BLITZ_ENV", "dev"),  # where these traces came from
 )
 
 client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])

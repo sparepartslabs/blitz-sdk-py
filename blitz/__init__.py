@@ -51,6 +51,7 @@ def init(
     redact: Optional[Callable[[str], str]] = None,
     max_content_chars: int = 24_000,
     service_name: str = "llm-app",
+    environment: str = "production",
 ) -> list[str]:
     """Initialize blitz tracing.
 
@@ -70,6 +71,11 @@ def init(
         max_content_chars: Hard cap per content field; longer values are
             truncated with a ``…[truncated]`` marker.
         service_name: Logical service name attached to every span.
+        environment: Deployment environment the traces originate from, e.g.
+            ``"production"``, ``"staging"``, ``"dev"``. Attached to every span
+            (via the OTel ``deployment.environment`` resource attribute) so the
+            dashboard can tell where traffic came from and scope observability
+            to one environment. Defaults to ``"production"``.
 
     Returns:
         The list of providers that were successfully instrumented
@@ -92,6 +98,7 @@ def init(
     resource = Resource.create(
         {
             "service.name": service_name,
+            "deployment.environment": environment,
             "blitz.project_id": project_id,
         }
     )
@@ -116,8 +123,9 @@ def init(
 
     _initialized = True
     logger.info(
-        "blitz initialized — project=%s providers=[%s] sample_rate=%s",
+        "blitz initialized — project=%s env=%s providers=[%s] sample_rate=%s",
         project_id,
+        environment,
         ", ".join(instrumented) or "none",
         sample_rate,
     )
